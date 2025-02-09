@@ -1,341 +1,225 @@
 import socket
 import threading
 import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
-import json
-import random
-from PIL import Image, ImageTk
-import os
-import time
+from tkinter import messagebox, simpledialog
 
-class EnhancedBattleshipClient:
-    def __init__(self, root):
+class BattleshipClient:
+    def _init_(self, root):
         self.root = root
-        self.root.title("Enhanced Battleship Battle")
-        self.root.configure(bg='#1A237E')
-        self.root.minsize(1200, 800)
-        
-        # Game variables
-        self.grid_size = 10
-        self.setup_phase = True
-        self.is_turn = False
-        self.current_ship = None
-        self.ship_orientation = 'horizontal'
-        
-        # Game state
-        self.player_board = [[None for _ in range(self.grid_size)] for _ in range(self.grid_size)]
-        self.opponent_board = [[None for _ in range(self.grid_size)] for _ in range(self.grid_size)]
-        self.ships = {
-            'carrier': {'size': 5, 'placed': False},
-            'battleship': {'size': 4, 'placed': False},
-            'cruiser': {'size': 3, 'placed': False},
-            'submarine': {'size': 3, 'placed': False},
-            'destroyer': {'size': 2, 'placed': False}
-        }
-        
-        # Statistics
-        self.stats = {
-            'hits': 0,
-            'misses': 0,
-            'total_shots': 0,
-            'games_played': 0,
-            'wins': 0
-        }
-        
-        # Setup network connection
-        self.setup_network()
-        
-        # Setup GUI
-        self.setup_styles()
-        self.create_layout()
-        self.create_boards()
-        self.setup_chat()
-        self.create_ship_placement_panel()
-        
-        # Start network threads
-        self.start_network_threads()
+        self.root.title("Dual Player Battleship with Chat")
+        self.root.configure(bg='#2C3E50')
 
-    def setup_network(self):
-        """Initialize network connections"""
+        # Network setup
+        self.client_game = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.client_chat = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        # Connect to the server
+        self.server_ip = simpledialog.askstring("Server Connection", "Enter Server IP:", initialvalue="192.168.10.253")
+        self.server_port = simpledialog.askinteger("Server Connection", "Enter Game Server Port:", initialvalue=8000)
+        self.chat_port = self.server_port + 1  # Chat port assumed to be +1 of game port
+
         try:
-            self.game_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.chat_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            
-            # Get server details
-            self.server_ip = simpledialog.askstring(
-                "Server Connection",
-                "Enter Server IP:",
-                initialvalue="localhost"
-            )
-            self.game_port = 8000
-            self.chat_port = 8001
-            
-            # Connect to server
-            self.game_socket.connect((self.server_ip, self.game_port))
-            self.chat_socket.connect((self.server_ip, self.chat_port))
-            
+            self.client_game.connect((self.server_ip, self.server_port))
+            self.client_chat.connect((self.server_ip, self.chat_port))
         except Exception as e:
-            messagebox.showerror("Connection Error", f"Failed to connect: {e}")
+            messagebox.showerror("Connection Error", f"Could not connect to server: {e}")
             self.root.quit()
+            return
+
+        # Game variables
+        self.grid_size = 5
+        self.buttons = [[None for _ in range(self.grid_size)] for _ in range(self.grid_size)]
+        self.is_turn = False
+        self.hits = 0
+        self.misses = 0
+
+        # Setup styling
+        self.setup_styles()
+
+        # Layout setup
+        self.setup_gui()
+
+        # Start listening to server messages
+        self.start_threads()
 
     def setup_styles(self):
-        """Configure GUI styles"""
-        self.style = ttk.Style()
-        self.style.theme_use('clam')
-        
-        # Color scheme
-        self.colors = {
-            'background': '#1A237E',
-            'grid_bg': '#E8EAF6',
-            'ship': '#303F9F',
-            'hit': '#F44336',
-            'miss': '#90A4AE',
-            'water': '#64B5F6',
-            'hover': '#7986CB'
+        """Set up custom styles for the game."""
+        self.root.option_add("*Font", "Arial 10")
+        self.style = {
+            'button_default': {
+                'width': 4,
+                'height': 2,
+                'font': ('Arial', 10, 'bold'),
+                'relief': tk.RAISED,
+                'borderwidth': 3
+            },
+            'hit': {
+                'bg': '#E74C3C',  # Bright red
+                'fg': 'white'
+            },
+            'miss': {
+                'bg': '#95A5A6',  # Gray
+                'fg': 'white'
+            },
+            'opponent_hit': {
+                'bg': '#F39C12',  # Orange
+                'fg': 'black'
+            },
+            'opponent_miss': {
+                'bg': '#BDC3C7',  # Light gray
+                'fg': 'black'
+            }
         }
-        
-        # Custom styles
-        self.style.configure(
-            'Game.TFrame',
-            background=self.colors['background']
-        )
-        self.style.configure(
-            'Board.TFrame',
-            background=self.colors['grid_bg'],
-            relief='raised',
-            borderwidth=2
-        )
 
-    def create_layout(self):
-        """Create main game layout"""
-        # Main container
-        self.main_frame = ttk.Frame(self.root, style='Game.TFrame')
-        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
-        
-        # Top section - Game info
-        self.info_frame = ttk.Frame(self.main_frame)
-        self.info_frame.pack(fill=tk.X, pady=(0, 20))
-        
-        self.title_label = ttk.Label(
+    def setup_gui(self):
+        """Sets up the game GUI."""
+        # Title Frame
+        self.title_frame = tk.Frame(self.root, bg='#2C3E50')
+        self.title_frame.pack(pady=10)
+
+        title_label = tk.Label(
+            self.title_frame,
+            text="Multiplayer Battleship with Chat",
+            font=("Arial", 16, "bold"),
+            fg='white',
+            bg='#2C3E50'
+        )
+        title_label.pack()
+
+        # Info Frame
+        self.info_frame = tk.Frame(self.root, bg='#34495E')
+        self.info_frame.pack(pady=10)
+
+        self.turn_label = tk.Label(
             self.info_frame,
-            text="BATTLESHIP WARFARE",
-            font=('Arial', 24, 'bold'),
-            foreground='white',
-            background=self.colors['background']
+            text="Connecting to server...",
+            font=("Arial", 14, "bold"),
+            fg='#ECF0F1',
+            bg='#34495E'
         )
-        self.title_label.pack()
-        
-        self.status_label = ttk.Label(
-            self.info_frame,
-            text="Waiting for opponent...",
-            font=('Arial', 16),
-            foreground='white',
-            background=self.colors['background']
-        )
-        self.status_label.pack()
-        
-        # Game boards container
-        self.boards_frame = ttk.Frame(self.main_frame)
-        self.boards_frame.pack(fill=tk.BOTH, expand=True)
+        self.turn_label.pack(padx=20, pady=10)
 
-    def create_boards(self):
-        """Create game boards"""
-        # Player's board
-        self.player_frame = ttk.Frame(self.boards_frame, style='Board.TFrame')
-        self.player_frame.pack(side=tk.LEFT, padx=10)
-        
-        ttk.Label(
-            self.player_frame,
-            text="YOUR FLEET",
-            font=('Arial', 14, 'bold')
-        ).pack(pady=5)
-        
-        self.create_grid('player')
-        
-        # Opponent's board
-        self.opponent_frame = ttk.Frame(self.boards_frame, style='Board.TFrame')
-        self.opponent_frame.pack(side=tk.RIGHT, padx=10)
-        
-        ttk.Label(
-            self.opponent_frame,
-            text="ENEMY WATERS",
-            font=('Arial', 14, 'bold')
-        ).pack(pady=5)
-        
-        self.create_grid('opponent')
+        # Grid Frame
+        self.grid_frame = tk.Frame(self.root, bg='#2C3E50')
+        self.grid_frame.pack()
 
-    def create_grid(self, board_type):
-        """Create game grid"""
-        grid_frame = ttk.Frame(
-            self.player_frame if board_type == 'player' else self.opponent_frame
-        )
-        grid_frame.pack(padx=10, pady=10)
-        
-        # Create buttons
         for row in range(self.grid_size):
             for col in range(self.grid_size):
                 btn = tk.Button(
-                    grid_frame,
-                    width=3,
-                    height=1,
-                    bg=self.colors['water'],
-                    relief=tk.RAISED,
-                    command=lambda r=row, c=col: self.grid_click(board_type, r, c)
+                    self.grid_frame,
+                    text=" ",
+                    command=lambda r=row, c=col: self.fire(r, c),
+                    **self.style['button_default'],
+                    bg='#3498DB',
+                    activebackground='#2980B9'
                 )
-                btn.grid(row=row, column=col, padx=1, pady=1)
-                
-                if board_type == 'player':
-                    self.player_board[row][col] = btn
-                else:
-                    self.opponent_board[row][col] = btn
+                btn.grid(row=row, column=col, padx=2, pady=2)
+                self.buttons[row][col] = btn
 
-    def setup_chat(self):
-        """Create chat interface"""
-        self.chat_frame = ttk.Frame(self.main_frame)
-        self.chat_frame.pack(fill=tk.X, pady=20)
-        
-        # Chat display
-        self.chat_display = tk.Text(
-            self.chat_frame,
-            height=6,
-            width=50,
-            state=tk.DISABLED
-        )
-        self.chat_display.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        
-        # Scrollbar
-        scrollbar = ttk.Scrollbar(self.chat_frame, command=self.chat_display.yview)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.chat_display['yscrollcommand'] = scrollbar.set
-        
-        # Chat input
-        self.chat_input = ttk.Entry(self.main_frame)
-        self.chat_input.pack(fill=tk.X, pady=(0, 20))
-        self.chat_input.bind('<Return>', self.send_chat)
+        # Chat Frame
+        self.chat_frame = tk.Frame(self.root, bg='#34495E')
+        self.chat_frame.pack(pady=10, fill=tk.BOTH, expand=True)
 
-    def create_ship_placement_panel(self):
-        """Create ship placement interface"""
-        self.placement_frame = ttk.Frame(self.main_frame)
-        self.placement_frame.pack(fill=tk.X, pady=(0, 20))
-        
-        # Ship selection buttons
-        for ship, data in self.ships.items():
-            btn = ttk.Button(
-                self.placement_frame,
-                text=f"{ship.title()} ({data['size']})",
-                command=lambda s=ship: self.select_ship(s)
-            )
-            btn.pack(side=tk.LEFT, padx=5)
-        
-        # Rotation button
-        self.rotate_btn = ttk.Button(
-            self.placement_frame,
-            text="Rotate Ship",
-            command=self.toggle_orientation
-        )
-        self.rotate_btn.pack(side=tk.LEFT, padx=5)
+        self.chat_log = tk.Text(self.chat_frame, state=tk.DISABLED, height=10, bg='#ECF0F1', fg='#2C3E50', wrap=tk.WORD)
+        self.chat_log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-    def start_network_threads(self):
-        """Start network listening threads"""
-        threading.Thread(target=self.listen_for_game_messages, daemon=True).start()
-        threading.Thread(target=self.listen_for_chat_messages, daemon=True).start()
+        self.chat_entry = tk.Entry(self.chat_frame, bg='#ECF0F1', fg='#2C3E50')
+        self.chat_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10, pady=10)
+        self.chat_entry.bind("<Return>", lambda _: self.send_chat())
 
-    def listen_for_game_messages(self):
-        """Listen for game server messages"""
+        send_button = tk.Button(self.chat_frame, text="Send", command=self.send_chat, bg='#3498DB', fg='white')
+        send_button.pack(side=tk.LEFT, padx=10, pady=10)
+
+    def start_threads(self):
+        """Start threads to listen for game and chat messages."""
+        threading.Thread(target=self.listen_to_server, daemon=True).start()
+        threading.Thread(target=self.listen_to_chat, daemon=True).start()
+
+    def listen_to_server(self):
+        """Listens for messages from the server."""
         while True:
             try:
-                data = self.game_socket.recv(4096).decode()
-                if not data:
-                    break
-                    
-                self.handle_game_message(json.loads(data))
-                
-            except Exception as e:
-                print(f"Game connection error: {e}")
-                break
-        
-        self.handle_disconnection()
+                data = self.client_game.recv(1024).decode()
 
-    def listen_for_chat_messages(self):
-        """Listen for chat messages"""
+                if data.startswith("HIT"):
+                    _, coords = data.split(":")
+                    r, c = map(int, coords.split(","))
+                    self.buttons[r][c].config(text="X", **self.style['hit'])
+                    self.hits += 1
+
+                elif data.startswith("MISS"):
+                    _, coords = data.split(":")
+                    r, c = map(int, coords.split(","))
+                    self.buttons[r][c].config(text="O", **self.style['miss'])
+                    self.misses += 1
+
+                elif data.startswith("Opponent HIT"):
+                    _, coords = data.split(":")
+                    r, c = map(int, coords.split(","))
+                    self.buttons[r][c].config(text="O", **self.style['opponent_hit'])
+
+                elif data.startswith("Opponent MISS"):
+                    _, coords = data.split(":")
+                    r, c = map(int, coords.split(","))
+                    self.buttons[r][c].config(text="O", **self.style['opponent_miss'])
+
+                elif "Your turn" in data:
+                    self.is_turn = True
+                    self.turn_label.config(text="Your Turn!", fg="#2ECC71")
+
+                elif "Not your turn" in data:
+                    self.is_turn = False
+                    self.turn_label.config(text="Opponent's Turn", fg="#E74C3C")
+
+                elif "You won!" in data:
+                    messagebox.showinfo("Game Over", "You won!")
+                    self.root.quit()
+
+                elif "You lost!" in data:
+                    messagebox.showinfo("Game Over", "You lost!")
+                    self.root.quit()
+
+            except Exception as e:
+                messagebox.showerror("Connection Error", f"Lost connection: {e}")
+                break
+
+    def listen_to_chat(self):
+        """Listens for chat messages from the server."""
         while True:
             try:
-                data = self.chat_socket.recv(4096).decode()
-                if not data:
-                    break
-                    
-                self.display_chat_message(data)
-                
+                message = self.client_chat.recv(1024).decode()
+                self.display_chat_message(message)
             except Exception as e:
-                print(f"Chat connection error: {e}")
+                self.display_chat_message(f"Chat error: {e}")
                 break
-
-    def handle_game_message(self, data):
-        """Process game messages from server"""
-        msg_type = data.get('type')
-        
-        if msg_type == 'turn':
-            self.handle_turn_message(data)
-        elif msg_type == 'shot_result':
-            self.handle_shot_result(data)
-        elif msg_type == 'game_over':
-            self.handle_game_over(data)
-        elif msg_type == 'opponent_disconnected':
-            self.handle_opponent_disconnection()
-
-    def grid_click(self, board_type, row, col):
-        """Handle grid button clicks"""
-        if self.setup_phase and board_type == 'player':
-            self.handle_ship_placement(row, col)
-        elif not self.setup_phase and board_type == 'opponent' and self.is_turn:
-            self.handle_shot(row, col)
-
-    def handle_ship_placement(self, row, col):
-        """Handle ship placement during setup"""
-        if not self.current_ship:
-            messagebox.showinfo("Ship Selection", "Please select a ship first!")
-            return
-            
-        ship_data = self.ships[self.current_ship]
-        if ship_data['placed']:
-            messagebox.showinfo("Ship Placed", "This ship has already been placed!")
-            return
-            
-        if self.can_place_ship(row, col, ship_data['size']):
-            self.place_ship(row, col, ship_data['size'])
-            ship_data['placed'] = True
-            
-            # Check if all ships are placed
-            if all(ship['placed'] for ship in self.ships.values()):
-                self.complete_setup()
-
-    def send_chat(self, event=None):
-        """Send chat message"""
-        message = self.chat_input.get().strip()
-        if message:
-            self.chat_socket.send(message.encode())
-            self.chat_input.delete(0, tk.END)
 
     def display_chat_message(self, message):
-        """Display chat message"""
-        self.chat_display.config(state=tk.NORMAL)
-        self.chat_display.insert(tk.END, f"{message}\n")
-        self.chat_display.see(tk.END)
-        self.chat_display.config(state=tk.DISABLED)
+        """Displays a chat message in the chat log."""
+        self.chat_log.config(state=tk.NORMAL)
+        self.chat_log.insert(tk.END, f"{message}\n")
+        self.chat_log.see(tk.END)
+        self.chat_log.config(state=tk.DISABLED)
 
-    def handle_disconnection(self):
-        """Handle disconnection from server"""
-        messagebox.showerror(
-            "Connection Lost",
-            "Lost connection to the server. The game will now close."
-        )
-        self.root.quit()
+    def send_chat(self):
+        """Sends a chat message to the server."""
+        message = self.chat_entry.get()
+        if message.strip():
+            self.client_chat.send(message.encode())
+            self.display_chat_message(f"You: {message}")
+            self.chat_entry.delete(0, tk.END)
 
-    def run(self):
-        """Start the game client"""
-        self.root.mainloop()
+    def fire(self, row, col):
+        """Handles the firing action."""
+        if not self.is_turn:
+            messagebox.showinfo("Wait", "It's not your turn!")
+            return
 
-if __name__ == "__main__":
+        self.client_game.send(f"{row},{col}".encode())
+        self.is_turn = False
+        self.turn_label.config(text="Waiting for opponent...", fg="#E67E22")
+        self.buttons[row][col].config(state=tk.DISABLED)
+
+if __name__ == "_main_":
     root = tk.Tk()
-    client = EnhancedBattleshipClient(root)
-    client.run()
+    BattleshipClient(root)
+    root.mainloop()
